@@ -1,13 +1,20 @@
 """Provides a light for Home Connect."""
 import logging
 
+from math import ceil
+
 from homeconnect.api import HomeConnectError
 
-from homeassistant.components.light import LightEntity
+from homeassistant.components.light import (ATTR_BRIGHTNESS, SUPPORT_BRIGHTNESS, ATTR_HS_COLOR, SUPPORT_COLOR, LightEntity)
+import homeassistant.util.color as color_util
 
 from .const import (
     COOKING_LIGHTING,
     COOKING_LIGHTINGBRIGHTNESS,
+    AMBIENT_LIGHTINGBRIGHTNESS,
+    AMBIENT_LIGHTING,
+    AMBIENT_LIGHTINGCOLOR,
+    AMBIENT_LIGHTINGCUSTOMCOLOR,
     DOMAIN,
 )
 from .entity import HomeConnectEntity
@@ -34,26 +41,113 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
 class HomeConnectLight(HomeConnectEntity, LightEntity):
     """Light for Home Connect."""
 
-    def __init__(self, device, desc):
+    def __init__(self, device, desc, ambient):
         """Initialize the entity."""
         super().__init__(device, desc)
         self._state = None
+        self._brightness = None
+        self._hs_color = None
+        self._ambient = ambient
+        if (self._ambient):
+           self._brightnesskey = AMBIENT_LIGHTINGBRIGHTNESS
+           self._key = AMBIENT_LIGHTING
+           self._customcolorkey = AMBIENT_LIGHTINGCUSTOMCOLOR
+           self._colorkey = AMBIENT_LIGHTINGCOLOR
+        else:
+           self._brightnesskey = COOKING_LIGHTINGBRIGHTNESS
+           self._key = COOKING_LIGHTING
+           self._customcolorkey = None
+           self._colorkey = None
 
     @property
     def is_on(self):
         """Return true if the light is on."""
         return bool(self._state)
 
+    @property
+    def brightness(self):
+        """Return the brightness of the light."""
+        return self._brightness
+
+    @property
+    def hs_color(self):
+        """Return the color property."""
+        return self._hs_color
+
+    
+    @property
+    def supported_features(self):
+        """Flag supported features."""
+        if (self._ambient):
+          return SUPPORT_BRIGHTNESS | SUPPORT_COLOR
+        
+        return SUPPORT_BRIGHTNESS
+
     async def async_turn_on(self, **kwargs):
-        """Switch the light on."""
-        _LOGGER.debug("Tried to switch light on for: %s", self.name)
-        try:
-            await self.hass.async_add_executor_job(
-                self.device.appliance.set_setting, COOKING_LIGHTING, True,
-            )
-        except HomeConnectError as err:
-            _LOGGER.error("Error while trying to turn on light of device: %s", err)
-            self._state = False
+        """Switch the light on / change brightness."""
+
+        if self._ambient:
+           if ATTR_BRIGHTNESS in kwargs or ATTR_HS_COLOR in kwargs:
+            try:
+                await self.hass.async_add_executor_job(
+                    self.device.appliance.set_setting, self._colorkey, "BSH.Common.EnumType.AmbientLightColor.CustomColor",
+                )
+            except HomeConnectError as err:
+                _LOGGER.error("Error while trying selecting customcolor: %s", err)
+
+            brightness = 10 + ceil(self._brightness/255 * 90)
+            if (ATTR_BRIGHTNESS in kwargs):
+               brightness = 10 + ceil(kwargs[ATTR_BRIGHTNESS] / 255 * 90)
+
+            hs_color = self._hs_color
+            if ATTR_HS_COLOR in kwargs:
+               hs_color = kwargs[ATTR_HS_COLOR]
+
+            if (hs_color != None):
+               rgb = color_util.color_hsv_to_RGB(*hs_color,brightness)
+               hex = color_util.color_rgb_to_hex(rgb[0],rgb[1],rgb[2])
+               try:
+                       await self.hass.async_add_executor_job(
+                           self.device.appliance.set_setting, self._customcolorkey, "#"+hex,
+                       )
+               except HomeConnectError as err:
+                       _LOGGER.error("Error while trying setting the color: %s", err)
+                       self._state = False
+           else:
+                _LOGGER.debug("Tried to switch light on for: %s", self.name)
+                try:
+                    await self.hass.async_add_executor_job(
+                        self.device.appliance.set_setting, self._key, True,
+                    )
+                except HomeConnectError as err:
+                    _LOGGER.error("Error while trying to turn on light: %s", err)
+                    self._state = False
+
+
+        elif ATTR_BRIGHTNESS in kwargs:
+                _LOGGER.debug("Tried to change brightness for: %s", self.name)
+                """ Convert Home Assistant brightness (0-255) to Home Connect brightness (10-100)
+                If <10 is sent to Home Connect, response is error
+                sending 10 does not switch the light on"""
+                brightness = 10 + ceil(kwargs[ATTR_BRIGHTNESS] / 255 * 90)
+                try:
+                    await self.hass.async_add_executor_job(
+                        self.device.appliance.set_setting, self._brightnesskey, brightness,
+                    )
+                except HomeConnectError as err:
+                    _LOGGER.error("Error while trying set the brightness: %s", err)
+                    self._state = False
+                    self._brightness = None
+        else:
+                _LOGGER.debug("Tried to switch light on for: %s", self.name)
+                try:
+                    await self.hass.async_add_executor_job(
+                        self.device.appliance.set_setting, self._key, True,
+                    )
+                except HomeConnectError as err:
+                    _LOGGER.error("Error while trying to turn on light: %s", err)
+                    self._state = False
+
         self.async_entity_update()
 
     async def async_turn_off(self, **kwargs):
@@ -61,25 +155,49 @@ class HomeConnectLight(HomeConnectEntity, LightEntity):
         _LOGGER.debug("tried to switch light off for: %s", self.name)
         try:
             await self.hass.async_add_executor_job(
-                self.device.appliance.set_setting, COOKING_LIGHTING, False,
+                self.device.appliance.set_setting, self._key, False,
             )
         except HomeConnectError as err:
-            _LOGGER.error("Error while trying to turn off light of device: %s", err)
+            _LOGGER.error("Error while trying to turn off light: %s", err)
             self._state = True
         self.async_entity_update()
 
     async def async_update(self):
         """Update the light's status."""
         if (
-            self.device.appliance.status.get(COOKING_LIGHTING, {}).get("value")
+            self.device.appliance.status.get(self._key, {}).get("value")
             is True
         ):
             self._state = True
         elif (
-            self.device.appliance.status.get(COOKING_LIGHTING, {}).get("value")
+            self.device.appliance.status.get(self._key, {}).get("value")
             is False
         ):
             self._state = False
         else:
             self._state = None
+
         _LOGGER.debug("Updated, new light state: %s", self._state)
+
+        if (self._ambient):
+           color = self.device.appliance.status.get(self._customcolorkey, {})
+
+           if not color:
+               self._hs_color = None
+               self._brightness = None
+           else:
+               colorvalue = color.get("value")[1:]
+               rgb = color_util.rgb_hex_to_rgb_list(colorvalue)
+               hsv = color_util.color_RGB_to_hsv(rgb[0],rgb[1],rgb[2])
+               self._hs_color = [hsv[0],hsv[1]]
+               self._brightness = ceil((hsv[2]-10) * 255 /90)
+               _LOGGER.debug("Updated, new brightness: %s", self._brightness)
+
+        else:
+           brightness = self.device.appliance.status.get(self._brightnesskey, {})
+           if not brightness:
+              self._brightness = None
+           else:
+              self._brightness = ceil((brightness.get("value") - 10) * 255 / 90)
+           _LOGGER.debug("Updated, new brightness: %s", self._brightness)
+

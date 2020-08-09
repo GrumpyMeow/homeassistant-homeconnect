@@ -90,3 +90,4 @@ class HomeConnectSensor(HomeConnectEntity):
     def device_class(self):
         """Return the device class."""
         return self._device_class
+        
