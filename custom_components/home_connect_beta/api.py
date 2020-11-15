@@ -1,20 +1,22 @@
 """API for Home Connect bound to HASS OAuth."""
 
-from asyncio import run_coroutine_threadsafe
 import logging
+from asyncio import run_coroutine_threadsafe
 
 import homeconnect
 from homeconnect.api import HomeConnectError
 
 from homeassistant import config_entries, core
-from homeassistant.const import DEVICE_CLASS_TIMESTAMP, TIME_SECONDS, UNIT_PERCENTAGE
+from homeassistant.const import DEVICE_CLASS_TIMESTAMP, PERCENTAGE, TIME_SECONDS
 from homeassistant.helpers import config_entry_oauth2_flow
 from homeassistant.helpers.dispatcher import dispatcher_send
 
 from .const import (
     BSH_ACTIVE_PROGRAM,
+    BSH_AMBIENTLIGHTENABLED,
     BSH_POWER_OFF,
     BSH_POWER_STANDBY,
+    COOKING_LIGHTING,
     SIGNAL_UPDATE_ENTITIES,
 )
 
@@ -56,6 +58,8 @@ class ConfigEntryAuth(homeconnect.HomeConnectAPI):
                 device = Dryer(self.hass, app)
             elif app.type == "Washer":
                 device = Washer(self.hass, app)
+            elif app.type == "WasherDryer":
+                device = WasherDryer(self.hass, app)
             elif app.type == "Dishwasher":
                 device = Dishwasher(self.hass, app)
             elif app.type == "FridgeFreezer":
@@ -141,7 +145,7 @@ class DeviceWithPrograms(HomeConnectDevice):
         sensors = {
             "Remaining Program Time": (None, None, DEVICE_CLASS_TIMESTAMP, 1),
             "Duration": (TIME_SECONDS, "mdi:update", None, 1),
-            "Program Progress": (UNIT_PERCENTAGE, "mdi:progress-clock", None, 1),
+            "Program Progress": (PERCENTAGE, "mdi:progress-clock", None, 1),
         }
         return [
             {
@@ -177,6 +181,19 @@ class DeviceWithLight(HomeConnectDevice):
         return {
             "device": self,
             "desc": "Light",
+            "ambient" : None,
+        }
+
+
+class DeviceWithAmbientLight(HomeConnectDevice):
+    """Device that has ambient lighting."""
+
+    def get_ambientlight_entity(self):
+        """Get a dictionary with info about the ambient lighting."""
+        return {
+            "device": self,
+            "desc": "AmbientLight",
+            "ambient" : True,
         }
 
 
@@ -214,7 +231,62 @@ class Dryer(DeviceWithDoor, DeviceWithPrograms):
         }
 
 
-class Dishwasher(DeviceWithDoor, DeviceWithPrograms):
+class WasherDryer(DeviceWithDoor, DeviceWithPrograms):
+    """Washer class."""
+
+    PROGRAMS = [
+        {"name": "LaundryCare.Washer.Program.Cotton"},
+        {"name": "LaundryCare.Washer.Program.Cotton.CottonEco"},
+        {"name": "LaundryCare.Washer.Program.EasyCare"},
+        {"name": "LaundryCare.Washer.Program.Mix"},
+        {"name": "LaundryCare.Washer.Program.DelicatesSilk"},
+        {"name": "LaundryCare.Washer.Program.Wool"},
+        {"name": "LaundryCare.Washer.Program.Sensitive"},
+        {"name": "LaundryCare.Washer.Program.Auto30"},
+        {"name": "LaundryCare.Washer.Program.Auto40"},
+        {"name": "LaundryCare.Washer.Program.Auto60"},
+        {"name": "LaundryCare.Washer.Program.Chiffon"},
+        {"name": "LaundryCare.Washer.Program.Curtains"},
+        {"name": "LaundryCare.Washer.Program.DarkWash"},
+        {"name": "LaundryCare.Washer.Program.Dessous"},
+        {"name": "LaundryCare.Washer.Program.Monsoon"},
+        {"name": "LaundryCare.Washer.Program.Outdoor"},
+        {"name": "LaundryCare.Washer.Program.PlushToy"},
+        {"name": "LaundryCare.Washer.Program.ShirtsBlouses"},
+        {"name": "LaundryCare.Washer.Program.SportFitness"},
+        {"name": "LaundryCare.Washer.Program.Towels"},
+        {"name": "LaundryCare.Washer.Program.WaterProof"},
+        {"name": "LaundryCare.Dryer.Program.Cotton"},
+        {"name": "LaundryCare.Dryer.Program.Synthetic"},
+        {"name": "LaundryCare.Dryer.Program.Mix"},
+        {"name": "LaundryCare.Dryer.Program.Blankets"},
+        {"name": "LaundryCare.Dryer.Program.BusinessShirts"},
+        {"name": "LaundryCare.Dryer.Program.DownFeathers"},
+        {"name": "LaundryCare.Dryer.Program.Hygiene"},
+        {"name": "LaundryCare.Dryer.Program.Jeans"},
+        {"name": "LaundryCare.Dryer.Program.Outdoor"},
+        {"name": "LaundryCare.Dryer.Program.SyntheticRefresh"},
+        {"name": "LaundryCare.Dryer.Program.Towels"},
+        {"name": "LaundryCare.Dryer.Program.Delicates"},
+        {"name": "LaundryCare.Dryer.Program.Super40"},
+        {"name": "LaundryCare.Dryer.Program.Shirts15"},
+        {"name": "LaundryCare.Dryer.Program.Pillow"},
+        {"name": "LaundryCare.Dryer.Program.AntiShrink"},
+    ]
+
+    def get_entity_info(self):
+        """Get a dictionary with infos about the associated entities."""
+        door_entity = self.get_door_entity()
+        program_sensors = self.get_program_sensors()
+        program_switches = self.get_program_switches()
+        return {
+            "binary_sensor": [door_entity],
+            "switch": program_switches,
+            "sensor": program_sensors,
+        }
+
+
+class Dishwasher(DeviceWithDoor, DeviceWithAmbientLight, DeviceWithPrograms):
     """Dishwasher class."""
 
     PROGRAMS = [
@@ -244,6 +316,7 @@ class Dishwasher(DeviceWithDoor, DeviceWithPrograms):
 
     def get_entity_info(self):
         """Get a dictionary with infos about the associated entities."""
+        ambientlight_entity = self.get_ambientlight_entity()
         door_entity = self.get_door_entity()
         program_sensors = self.get_program_sensors()
         program_switches = self.get_program_switches()
@@ -251,6 +324,7 @@ class Dishwasher(DeviceWithDoor, DeviceWithPrograms):
             "binary_sensor": [door_entity],
             "switch": program_switches,
             "sensor": program_sensors,
+            "light": [ambientlight_entity]
         }
 
 
@@ -371,7 +445,7 @@ class CoffeeMaker(DeviceWithPrograms):
         return {"switch": program_switches, "sensor": program_sensors}
 
 
-class Hood(DeviceWithLight, DeviceWithPrograms):
+class Hood(DeviceWithLight, DeviceWithAmbientLight, DeviceWithPrograms):
     """Hood class."""
 
     PROGRAMS = [
@@ -383,12 +457,13 @@ class Hood(DeviceWithLight, DeviceWithPrograms):
     def get_entity_info(self):
         """Get a dictionary with infos about the associated entities."""
         light_entity = self.get_light_entity()
+        ambientlight_entity = self.get_ambientlight_entity()
         program_sensors = self.get_program_sensors()
         program_switches = self.get_program_switches()
         return {
             "switch": program_switches,
             "sensor": program_sensors,
-            "light" : [light_entity],
+            "light" : [light_entity, ambientlight_entity]
         }
 
 
